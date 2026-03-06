@@ -2,171 +2,168 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# ----------------------------
-# Configuration
-# ----------------------------
-PULL_MAX_PCT = 10.0  # Max absolute percent a slider can pull toward a bound
+# ---------------------------------
+# Konfigurace
+# ---------------------------------
+PULL_MAX_PCT = 10.0  # maximální posun k hranici (%)
 
-# ----------------------------
-# Utility functions
-# ----------------------------
-def round_to_million(x: np.ndarray) -> np.ndarray:
-    """Round values to the nearest 1,000,000."""
-    return np.round(x / 1_000_000) * 1_000_000
-
-def generate_one_scenario_with_pulls(
-    low: float,
-    high: float,
-    pulls_pct: list[float],
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """
-    Generate one scenario of 5 values with per-position pulls.
-
-    pulls_pct: list of 5 floats in [-PULL_MAX_PCT, +PULL_MAX_PCT]
-       - Negative = pull toward lower bound
-       - Positive = pull toward upper bound
-       - 0 = uniform across the whole interval
-       - Magnitude (abs) = proximity band as % of interval near the chosen bound
-    """
+# ---------------------------------
+# Funkce
+# ---------------------------------
+def generate_one_value(low: float, high: float, pull_pct: float, rng: np.random.Generator) -> float:
+    """Generate one value in the given range, optionally pulled toward one bound."""
     if low > high:
         raise ValueError("Lower bound must be <= upper bound.")
-    if len(pulls_pct) != 5:
-        raise ValueError("Expected 5 pull values (one per Value_1..Value_5).")
-
     interval = high - low
-    # Handle degenerate interval
+
     if interval == 0:
-        return np.array([low] * 5, dtype=float)
+        return int(low)
 
-    values = []
-    for p in pulls_pct:
-        if p == 0:
-            # No pull: uniform across the whole interval
-            val = rng.uniform(low, high)
+    if pull_pct == 0:
+        val = rng.uniform(low, high)
+    else:
+        prox = min(abs(pull_pct) / 100.0, 1.0)
+        prox = max(prox, 1e-12)
+
+        if pull_pct > 0:
+            band_low = high - prox * interval
+            val = rng.uniform(band_low, high)
         else:
-            prox = min(abs(p) / 100.0, 1.0)  # convert % to fraction; cap at 100%
-            prox = max(prox, 1e-12)          # avoid zero-width band
+            band_high = low + prox * interval
+            val = rng.uniform(low, band_high)
 
-            if p > 0:
-                # Pull to upper: pick within last 'prox' fraction near high
-                band_low = high - prox * interval
-                val = rng.uniform(band_low, high)
-            else:
-                # Pull to lower: pick within first 'prox' fraction near low
-                band_high = low + prox * interval
-                val = rng.uniform(low, band_high)
+    # clip to range
+    val = float(np.clip(val, low, high))
 
-        values.append(val)
+    # NEW — round to integer
+    return int(round(val))
 
-    scenario = np.array(values, dtype=float)
 
-    # Round to nearest million and clip back to [low, high]
-    scenario = round_to_million(scenario)
-    scenario = np.clip(scenario, low, high)
-    return scenario
-
-def generate_scenarios(
-    n_scenarios: int,
-    low: float,
-    high: float,
-    pulls_pct: list[float],
-    seed: int | None = None,
-) -> pd.DataFrame:
-    """
-    Generate n_scenarios rows; each row has 5 columns (Value_1 .. Value_5).
-    """
+def generate_scenarios(n_scenarios: int, items: list, seed: int | None = None) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     data = []
 
     for _ in range(n_scenarios):
-        scenario = generate_one_scenario_with_pulls(low, high, pulls_pct, rng)
-        data.append(scenario)
+        row = []
+        for item in items:
+            val = generate_one_value(item["low"], item["high"], item["pull"], rng)
+            row.append(val)
+        data.append(row)
 
-    df = pd.DataFrame(data, columns=[f"Cena{i}" for i in range(1, 6)])
+    df = pd.DataFrame(data, columns=[item["name"] for item in items])
     df.insert(0, "Scenario", np.arange(1, n_scenarios + 1))
     return df
 
 
-# ----------------------------
+# ---------------------------------
+# Položky
+# ---------------------------------
+MAIN_ITEMS = [
+    "Analytický projekt implementace a migrace dat",
+    "Implementace",
+    "Licence",
+    "Migrace všech stávajících dat",
+    "Školení",
+]
+
+SUPPORT_ITEMS = [
+    "Služba uživatelské a aplikační podpory v rámci pilotního provozu",
+    "Služba uživatelské a aplikační podpory",
+    "Služba provozu maintenance",
+]
+
+DEV_ITEMS = [
+    "Služba rozvoje dle objednávek Objednatele",
+    "Služba rozvoje dle objednávek Objednatele nad rámec avizovaných 320 MD",
+]
+
+ALL_ITEMS = MAIN_ITEMS + SUPPORT_ITEMS + DEV_ITEMS
+
+# ---------------------------------
 # Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="Generátor nabídek", page_icon="🎲", layout="centered")
-st.title("🎲 Generátor nabídek (zaokrouhleno na 1,000,000)")
+# ---------------------------------
+st.set_page_config(page_title="Generátor nabídek", page_icon="🎲", layout="wide")
+st.title("🎲 Generátor nabídek — zaokrouhleno na celé jednotky")
 
 with st.sidebar:
-    st.header("Vstupy")
+    st.header("Vstupní parametry")
+    st.caption("0 % = náhodně • záporné = ke spodní hranici • kladné = k horní hranici")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        lower = st.number_input("Spodní hranice", value=0.0, step=1_000_000.0, format="%.0f")
-    with col2:
-        upper = st.number_input("Horní hranice", value=100_000_000.0, step=1_000_000.0, format="%.0f")
+    config_items = []
 
-    st.markdown("### Určení extrémních hodnot")
-    st.caption("Negativní = směrem k dolní hranice • Pozitivní = směrem k horní hranici • 0% = zcela náhodná hodnota")
+    for name in ALL_ITEMS:
+        st.markdown(f"### {name}")
+        col1, col2 = st.columns(2)
 
-    pulls = []
-    for i in range(1, 6):
-        pulls.append(
-            st.slider(
-                f"Posunutí ceny {i} (%)",
-                min_value=-PULL_MAX_PCT,
-                max_value= PULL_MAX_PCT,
-                value=0.0,
-                step=0.1,
-            )
+        low = col1.number_input(f"{name} – spodní hranice", value=0.0, step=100_000.0, format="%.0f")
+        high = col2.number_input(f"{name} – horní hranice", value=100_000_000.0, step=100_000.0, format="%.0f")
+
+        pull = st.slider(
+            f"{name} – extrémní hodnota (%)",
+            min_value=-PULL_MAX_PCT,
+            max_value=PULL_MAX_PCT,
+            value=0.0,
+            step=0.1,
         )
+
+        config_items.append({"name": name, "low": float(low), "high": float(high), "pull": float(pull)})
+        st.markdown("---")
 
     n_scenarios = st.number_input("Počet scénářů", min_value=1, max_value=50_000, value=10, step=1)
 
-    seed_opt = st.checkbox("Zadejte random seed (možnost reprodukovat)?", value=True)
-    seed = st.number_input("Seed", min_value=0, max_value=1_000_000_000, value=42, step=1) if seed_opt else None
+    seed_opt = st.checkbox("Použít seed (opakovatelný výstup)", value=True)
+    seed = st.number_input("Seed", min_value=0, max_value=1_000_000_000, value=42) if seed_opt else None
 
-    st.markdown("---")
     generate_btn = st.button("Generovat scénáře", type="primary", use_container_width=True)
 
-# Validation messages
-if lower > upper:
-    st.error("Lower bound must be **less than or equal to** upper bound.")
-elif (upper - lower) < 1_000_000:
-    st.warning(
-        "Note: The interval is smaller than 1,000,000. Rounding to the nearest million may cause many values "
-        "to collapse to the same rounded values."
-    )
 
-# Generate scenarios
-if generate_btn and lower <= upper:
+# ---------------------------------
+# Výpočet a zobrazení
+# ---------------------------------
+if generate_btn:
     try:
+        for item in config_items:
+            if item["low"] > item["high"]:
+                st.error(f"U položky **{item['name']}** je spodní hranice větší než horní.")
+                st.stop()
+
         df = generate_scenarios(
             n_scenarios=int(n_scenarios),
-            low=float(lower),
-            high=float(upper),
-            pulls_pct=[float(p) for p in pulls],
+            items=config_items,
             seed=int(seed) if seed is not None else None,
         )
 
-        # -----------------------
-        # PIVOTED + THOUSANDS SEPARATORS
-        # -----------------------
-        value_cols = [c for c in df.columns if c.startswith("Cena")]
-
-        # Scenarios as columns; Value_1..Value_5 as rows
+        value_cols = [c for c in df.columns if c != "Scenario"]
         pivot_df = df.set_index("Scenario")[value_cols].T
-        pivot_df.index.name = "Cena"
+        pivot_df.index.name = "Položka"
 
-        # Thousands separators for display
-        styled_pivot = pivot_df.style.format("{:,.0f}")
+        # -------------------------
+        # Barevné odlišení bloků
+        # -------------------------
+        def row_highlighter(row):
+            idx = row.name
+            if idx in MAIN_ITEMS:
+                return ["background-color: #E6F2FF"] * len(row)
+            elif idx in SUPPORT_ITEMS:
+                return ["background-color: #E9FBE6"] * len(row)
+            else:
+                return ["background-color: #FFF9D6"] * len(row)
+
+        styled = pivot_df.style.format("{:,.0f}").apply(row_highlighter, axis=1)
+
+        # Dynamická výška
+        row_height = 38
+        header_height = 45
+        total_height = header_height + row_height * len(pivot_df)
 
         st.dataframe(
-            styled_pivot,
+            styled,
             use_container_width=True,
-            height=min(700, 60 + 35 * len(pivot_df))
+            height=total_height
         )
 
-
-        # Download original (not pivoted) as raw numbers
-        csv = pivot_df.to_csv(index=False).encode("utf-8")
+        # CSV export
+        csv = pivot_df.to_csv(index=True).encode("utf-8")
         st.download_button(
             label="⬇️ Stáhnout CSV",
             data=csv,
@@ -175,9 +172,9 @@ if generate_btn and lower <= upper:
             use_container_width=True
         )
 
-
     except Exception as e:
-        st.error(f"Generation failed: {e}")
+        st.error(f"Chyba při generování: {e}")
 
 else:
-    st.info("Zadejte parametry vlevo a kliněte na **Generovat scénáře**.")
+    st.info("Nastav parametry vlevo a klikni na **Generovat scénáře**.")
+``
