@@ -83,7 +83,7 @@ ALL_ITEMS = MAIN_ITEMS + SUPPORT_ITEMS + DEV_ITEMS
 # Streamlit UI
 # ---------------------------------
 st.set_page_config(page_title="Generátor nabídek", page_icon="🎲", layout="wide")
-st.title("🎲 Generátor nabídek — zaokrouhleno na celé jednotky")
+st.title("🎲 Generátor nabídek — ceny uvedné v Kč")
 
 with st.sidebar:
     st.header("Vstupní parametry")
@@ -177,4 +177,3 @@ if generate_btn:
 
 else:
     st.info("Nastav parametry vlevo a klikni na **Generovat scénáře**.")
-``
